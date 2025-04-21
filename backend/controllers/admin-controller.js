@@ -28,44 +28,26 @@ const adminRegister = async (req, res) => {
             return res.status(400).send({ message: 'School name already exists' });
         }
 
+        // Hash password before saving
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
         // Create new admin in MongoDB
         const admin = new Admin({
             name,
             email,
-            password,
+            password: hashedPassword,
             role: role || 'Admin',
             schoolName
         });
 
-        console.log('Attempting to save to MongoDB...');
-        const mongoResult = await admin.save();
-        console.log('MongoDB save successful');
+        const savedAdmin = await admin.save();
+        
+        // Send response without password
+        const response = { ...savedAdmin.toObject() };
+        delete response.password;
+        res.status(201).send(response);
 
-        // Insert into MySQL
-        try {
-            console.log('Attempting MySQL insertion...');
-            const [mysqlResult] = await db.mysql.execute(
-                'INSERT INTO admin (name, email, password, role, school_name) VALUES (?, ?, ?, ?, ?)',
-                [name, email, password, role || 'Admin', schoolName]
-            );
-            console.log('MySQL insertion successful');
-
-            // Send response without password
-            const response = { ...mongoResult.toObject() };
-            delete response.password;
-            res.status(200).send(response);
-            
-        } catch (mysqlError) {
-            // If MySQL fails, rollback MongoDB insertion
-            console.error('MySQL Error:', mysqlError);
-            await Admin.findByIdAndDelete(mongoResult._id);
-            return res.status(500).send({ 
-                message: 'Registration failed', 
-                error: mysqlError.message,
-                sqlState: mysqlError.sqlState,
-                sqlMessage: mysqlError.sqlMessage 
-            });
-        }
     } catch (err) {
         console.error('Server Error:', err);
         res.status(500).send({ 
@@ -86,33 +68,25 @@ const adminLogIn = async (req, res) => {
         }
 
         // Check in MongoDB
-        const mongoAdmin = await Admin.findOne({ email });
+        const admin = await Admin.findOne({ email });
         
-        // Check in MySQL
-        const [mysqlResults] = await db.mysql.execute(
-            'SELECT * FROM admin WHERE email = ?',
-            [email]
-        );
-        const mysqlAdmin = mysqlResults[0];
-
-        // Verify admin exists in both databases
-        if (!mongoAdmin || !mysqlAdmin) {
-            console.log('Admin not found in one or both databases');
+        if (!admin) {
             return res.status(401).send({ message: "Invalid email or password" });
         }
 
         // Verify password
-        if (password !== mongoAdmin.password) {
+        const validPassword = await bcrypt.compare(password, admin.password);
+        if (!validPassword) {
             return res.status(401).send({ message: "Invalid email or password" });
         }
 
         // Send response without sensitive data
         const response = {
-            _id: mongoAdmin._id,
-            name: mongoAdmin.name,
-            email: mongoAdmin.email,
-            role: mongoAdmin.role,
-            schoolName: mongoAdmin.schoolName
+            _id: admin._id,
+            name: admin.name,
+            email: admin.email,
+            role: admin.role,
+            schoolName: admin.schoolName
         };
 
         res.status(200).send(response);
@@ -132,35 +106,13 @@ const getAdminDetail = async (req, res) => {
         const { id } = req.params;
 
         // Get from MongoDB using ID
-        const mongoAdmin = await Admin.findById(id);
+        const admin = await Admin.findById(id).select('-password'); // Exclude password field
         
-        if (!mongoAdmin) {
+        if (!admin) {
             return res.status(404).send({ message: "Admin not found" });
         }
 
-        // Verify in MySQL using email
-        const [mysqlResults] = await db.mysql.execute(
-            'SELECT * FROM admin WHERE email = ?',
-            [mongoAdmin.email]
-        );
-        const mysqlAdmin = mysqlResults[0];
-
-        if (!mysqlAdmin) {
-            console.warn(`Data inconsistency: Admin found in MongoDB but not in MySQL. ID: ${id}`);
-            return res.status(404).send({ message: "Admin data inconsistent across databases" });
-        }
-
-        // Send response without sensitive data
-        const response = {
-            _id: mongoAdmin._id,
-            name: mongoAdmin.name,
-            email: mongoAdmin.email,
-            role: mongoAdmin.role,
-            schoolName: mongoAdmin.schoolName,
-            mysql_id: mysqlAdmin.admin_id
-        };
-
-        res.status(200).send(response);
+        res.status(200).send(admin);
 
     } catch (err) {
         console.error('Error fetching admin details:', err);
@@ -174,8 +126,8 @@ const getAdminDetail = async (req, res) => {
 
 const getAllAdmins = async (req, res) => {
     try {
-        // Get all admins from MongoDB
-        const admins = await Admin.find({}, { password: 0 }); // Exclude password field
+        // Get all admins from MongoDB, excluding password field
+        const admins = await Admin.find({}).select('-password');
         
         if (!admins || admins.length === 0) {
             return res.status(404).send({ message: "No admins found" });

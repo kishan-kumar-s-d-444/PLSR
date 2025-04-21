@@ -2,12 +2,9 @@ require('dotenv').config();
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
-const mysql = require('mysql2/promise');
-const dotenv = require("dotenv");
 const app = express();
 const Routes = require("./routes/route.js");
 const PORT = process.env.PORT || 5000;
-dotenv.config();
 const { initializeDBConnections, db } = require('./config/db');
 app.use(express.json({ limit: '10mb' }));
 app.use(cors());
@@ -17,27 +14,20 @@ const { Server } = require("socket.io");
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
-        origin: "http://localhost:3000",
+        origin: ["http://localhost:3000", "https://plsr-psi.vercel.app"],
         methods: ["GET", "POST"],
+        credentials: true
     },
 });
 
-// Log Environment Variables
-console.log('Environment Variables Loaded:', {
-    NODE_ENV: process.env.NODE_ENV,
-    CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME,
-    CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY ? 'Present' : 'Missing',
-    CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET ? 'Present' : 'Missing'
-});
 
-// Import Doubt model for socket message saving
 const Doubt = require("./models/doubtSchema");
 
 // Initialize database connections before starting the server
 const startServer = async () => {
     try {
         await initializeDBConnections();
-        console.log("All database connections initialized.");
+        console.log("MongoDB connection initialized.");
 
         // Set up routes
         app.use("/", Routes);
@@ -82,7 +72,7 @@ const startServer = async () => {
                         messageData.receiverClass = data.receiverClass;
                     }
 
-                    // Save message to database
+                    // Save message to MongoDB
                     const newDoubt = new Doubt(messageData);
                     const savedDoubt = await newDoubt.save();
 
@@ -127,11 +117,9 @@ const startServer = async () => {
         });
     } catch (error) {
         console.error('Failed to start server:', error);
+        process.exit(1); // Exit the process if database connection fails
     }
 };
 
 // Start the server
 startServer();
-
-// Export both database connections
-module.exports = { db };

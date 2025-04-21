@@ -108,17 +108,23 @@ const LoginPage = ({ role }) => {
             }
         }
         else if (status === 'failed') {
-            setMessage(response)
-            setShowPopup(true)
-            setLoader(false)
+            if (response && response.toLowerCase().includes('user not found')) {
+                setMessage("User does not exist. Please check your credentials or register.");
+            } else {
+                setMessage(response);
+            }
+            setShowPopup(true);
+            setLoader(false);
+            setGuestLoader(false);
         }
         else if (status === 'error') {
-            setMessage("Network Error")
-            setShowPopup(true)
-            setLoader(false)
-            setGuestLoader(false)
+            console.log(error);
+            setMessage("Invalid Credentials");
+            setShowPopup(true);
+            setLoader(false);
+            setGuestLoader(false);
         }
-    }, [status, currentRole, navigate, error, response, currentUser]);
+    }, [status, currentUser, currentRole, navigate, error, response]);
 
     return (
         <ThemeProvider theme={defaultTheme}>

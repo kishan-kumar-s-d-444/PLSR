@@ -1,9 +1,8 @@
-// Create new file for database connections
+// Create new file for database connections (MongoDB only)
 const mongoose = require('mongoose');
-const mysql = require('mysql2/promise');
 require('dotenv').config();
 
-// Create an object to store both database connections
+// Create an object to store the database connection
 const db = {};
 
 // MongoDB connection
@@ -17,37 +16,13 @@ const connectMongo = async () => {
         db.mongodb = mongoose.connection;
     } catch (err) {
         console.error("NOT CONNECTED TO MONGODB:", err.message);
+        throw err; // Re-throw the error to handle it in the initializeDBConnections function
     }
 };
 
-// MySQL connection pool
-const connectMySQL = async () => {
-    try {
-        const pool = mysql.createPool({
-            host: process.env.DB_HOST,
-            user: process.env.DB_USER,
-            password: process.env.DB_PASS,
-            database: process.env.DB_NAME,
-            waitForConnections: true,
-            connectionLimit: 10,
-            queueLimit: 0
-        });
-
-        // Test the connection
-        const connection = await pool.getConnection();
-        console.log("Connected to MySQL");
-        connection.release();
-        
-        db.mysql = pool;
-    } catch (err) {
-        console.error("MySQL Connection Failed:", err.message);
-    }
-};
-
-// Initialize both connections
+// Initialize the MongoDB connection
 const initializeDBConnections = async () => {
     await connectMongo();
-    await connectMySQL();
     return db;
 };
 

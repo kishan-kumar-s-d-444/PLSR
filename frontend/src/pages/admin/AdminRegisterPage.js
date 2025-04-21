@@ -70,12 +70,19 @@ const handleSubmit = (event) => {
             navigate('/Admin/dashboard');
         }
         else if (status === 'failed') {
-            setMessage(response)
-            setShowPopup(true)
-            setLoader(false)
+            if (response && response.includes('already exists')) {
+                setMessage("This email is already registered. Please use a different email.");
+            } else {
+                setMessage(response);
+            }
+            setShowPopup(true);
+            setLoader(false);
         }
         else if (status === 'error') {
-            console.log(error)
+            console.log(error);
+            setMessage("Email Already Exists");
+            setShowPopup(true);
+            setLoader(false);
         }
     }, [status, currentUser, currentRole, navigate, error, response]);
 

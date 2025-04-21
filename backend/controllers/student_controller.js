@@ -3,79 +3,63 @@ const Student = require('../models/studentSchema.js');
 const Subject = require('../models/subjectSchema.js');
 const Admin = require('../models/adminSchema.js');
 const Sclass = require('../models/sclassSchema.js');
-const { db } = require('../config/db');
 
 const studentRegister = async (req, res) => {
     try {
         const { name, rollNum, password, adminID, sclassName } = req.body;
 
-        // Get MySQL IDs for admin and class
-        const admin = await Admin.findById(adminID);
-        if (!admin) {
-            return res.status(404).send({ message: "Admin not found" });
+        // Validate input
+        if (!name || !rollNum || !password || !adminID || !sclassName) {
+            return res.status(400).json({ 
+                message: 'All fields are required: name, rollNum, password, adminID, sclassName' 
+            });
         }
 
-        const sclass = await Sclass.findById(sclassName);
-        if (!sclass) {
-            return res.status(404).send({ message: "Class not found" });
+        // Verify admin exists
+        const adminExists = await Admin.findById(adminID);
+        if (!adminExists) {
+            return res.status(404).json({ message: "Admin not found" });
         }
 
-        // Get MySQL admin_id and sclass_id
-        const [mysqlAdmin] = await db.mysql.execute(
-            'SELECT admin_id FROM admin WHERE email = ?',
-            [admin.email]
-        );
+        // Verify class exists
+        const classExists = await Sclass.findById(sclassName);
+        if (!classExists) {
+            return res.status(404).json({ message: "Class not found" });
+        }
 
-        const [mysqlClass] = await db.mysql.execute(
-            'SELECT sclass_id FROM sclass WHERE sclass_name = ? AND admin_id = ?',
-            [sclass.sclassName, mysqlAdmin[0].admin_id]
-        );
-
-        // Check for existing student in both databases
+        // Check for existing student
         const existingStudent = await Student.findOne({
             rollNum,
             school: adminID,
             sclassName
         });
 
-        const [existingMySQLStudent] = await db.mysql.execute(
-            'SELECT * FROM students WHERE roll_num = ? AND admin_id = ? AND sclass_id = ?',
-            [rollNum, mysqlAdmin[0].admin_id, mysqlClass[0].sclass_id]
-        );
-
-        if (existingStudent || existingMySQLStudent.length > 0) {
-            return res.status(400).send({ message: 'Roll Number already exists' });
+        if (existingStudent) {
+            return res.status(400).json({ message: 'Roll Number already exists' });
         }
 
         // Hash password
         const salt = await bcrypt.genSalt(10);
         const hashedPass = await bcrypt.hash(password, salt);
 
-        // Create in MongoDB
+        // Create new student
         const student = new Student({
             name,
             rollNum,
             password: hashedPass,
             school: adminID,
-            sclassName
+            sclassName,
+            role: 'Student'
         });
 
-        const mongoResult = await student.save();
+        const savedStudent = await student.save();
+        
+        // Remove sensitive data before sending response
+        const response = savedStudent.toObject();
+        delete response.password;
+        delete response.__v;
 
-        // Create in MySQL
-        const [mysqlResult] = await db.mysql.execute(
-            'INSERT INTO students (name, roll_num, password, admin_id, sclass_id) VALUES (?, ?, ?, ?, ?)',
-            [name, rollNum, hashedPass, mysqlAdmin[0].admin_id, mysqlClass[0].sclass_id]
-        );
-
-        // Send response without password
-        const response = {
-            ...mongoResult.toObject(),
-            mysql_id: mysqlResult.insertId,
-            password: undefined
-        };
-
-        res.status(201).send(response);
+        res.status(201).json(response);
 
     } catch (err) {
         console.error('Student registration error:', err);
@@ -88,50 +72,39 @@ const studentRegister = async (req, res) => {
 
 const studentLogIn = async (req, res) => {
     try {
-        // Find student in MongoDB
-        let student = await Student.findOne({ 
-            rollNum: req.body.rollNum, 
-            name: req.body.studentName 
-        });
+        const { rollNum, studentName, password } = req.body;
 
-        if (!student) {
-            return res.status(404).send({ message: "Student not found" });
+        // Validate input
+        if (!rollNum || !studentName || !password) {
+            return res.status(400).json({ message: 'Roll number, name and password are required' });
         }
 
-        // Get MySQL student data
-        const [mysqlStudent] = await db.mysql.execute(
-            `SELECT s.*, sc.sclass_name, a.school_name 
-             FROM students s 
-             JOIN sclass sc ON s.sclass_id = sc.sclass_id 
-             JOIN admin a ON s.admin_id = a.admin_id 
-             WHERE s.roll_num = ? AND s.name = ?`,
-            [req.body.rollNum, req.body.studentName]
-        );
+        // Find student and populate related data
+        let student = await Student.findOne({ 
+            rollNum,
+            name: studentName 
+        })
+        .populate("school", "schoolName")
+        .populate("sclassName", "sclassName");
 
-        if (mysqlStudent.length === 0) {
-            return res.status(404).send({ message: "Student not found" });
+        if (!student) {
+            return res.status(404).json({ message: "Student not found" });
         }
 
         // Verify password
-        const validated = await bcrypt.compare(req.body.password, student.password);
-        if (!validated) {
-            return res.status(401).send({ message: "Invalid password" });
+        const validPassword = await bcrypt.compare(password, student.password);
+        if (!validPassword) {
+            return res.status(401).json({ message: "Invalid password" });
         }
 
-        // Populate MongoDB references
-        student = await student.populate("school", "schoolName");
-        student = await student.populate("sclassName", "sclassName");
+        // Remove sensitive data before sending response
+        const response = student.toObject();
+        delete response.password;
+        delete response.__v;
+        delete response.attendance;
+        delete response.examResult;
 
-        // Combine data and remove sensitive information
-        const response = {
-            ...student.toObject(),
-            mysql_id: mysqlStudent[0].student_id,
-            password: undefined,
-            examResult: undefined,
-            attendance: undefined
-        };
-
-        res.send(response);
+        res.status(200).json(response);
 
     } catch (err) {
         console.error('Student login error:', err);
@@ -144,257 +117,145 @@ const studentLogIn = async (req, res) => {
 
 const getStudents = async (req, res) => {
     try {
-        // Get admin details for MySQL query
-        const admin = await Admin.findById(req.params.id);
-        if (!admin) {
-            return res.status(404).send({ message: "Admin not found" });
+        const adminId = req.params.id;
+
+        // Get students with populated class info, excluding passwords
+        const students = await Student.find({ school: adminId })
+            .populate("sclassName", "sclassName")
+            .select('-password -__v');
+
+        if (students.length === 0) {
+            return res.status(404).json({ message: "No students found" });
         }
 
-        // Get MySQL admin_id
-        const [mysqlAdmin] = await db.mysql.execute(
-            'SELECT admin_id FROM admin WHERE email = ?',
-            [admin.email]
-        );
-
-        // Get from MongoDB with populated fields
-        let mongoStudents = await Student.find({ school: req.params.id })
-            .populate("sclassName", "sclassName");
-
-        // Get from MySQL with joined data
-        const [mysqlStudents] = await db.mysql.execute(
-            `SELECT s.*, sc.sclass_name 
-             FROM students s 
-             JOIN sclass sc ON s.sclass_id = sc.sclass_id 
-             WHERE s.admin_id = ?`,
-            [mysqlAdmin[0].admin_id]
-        );
-
-        if (mongoStudents.length > 0) {
-            // Combine data and remove sensitive information
-            const students = mongoStudents.map(student => {
-                const mysqlStudent = mysqlStudents.find(ms => 
-                    ms.roll_num === student.rollNum && 
-                    ms.name === student.name
-                );
-                return {
-                    ...student.toObject(),
-                    mysql_id: mysqlStudent?.student_id,
-                    password: undefined
-                };
-            });
-            res.send(students);
-        } else {
-            res.send({ message: "No students found" });
-        }
+        res.status(200).json(students);
     } catch (err) {
         console.error('Error fetching students:', err);
-        res.status(500).json(err);
+        res.status(500).json({
+            message: 'Failed to fetch students',
+            error: err.message
+        });
     }
 };
 
 const getStudentDetail = async (req, res) => {
     try {
-        // Get from MongoDB with populated fields
-        let student = await Student.findById(req.params.id)
+        const studentId = req.params.id;
+
+        // Get student with all populated data
+        const student = await Student.findById(studentId)
             .populate("school", "schoolName")
             .populate("sclassName", "sclassName")
             .populate("examResult.subName", "subName")
-            .populate("attendance.subName", "subName sessions");
+            .populate("attendance.subName", "subName sessions")
+            .select('-password -__v');
 
         if (!student) {
-            return res.send({ message: "No student found" });
+            return res.status(404).json({ message: "Student not found" });
         }
 
-        // Get from MySQL with joined data
-        const [mysqlStudent] = await db.mysql.execute(
-            `SELECT s.*, sc.sclass_name, a.school_name,
-                    GROUP_CONCAT(DISTINCT er.marks_obtained) as exam_results,
-                    GROUP_CONCAT(DISTINCT sa.status) as attendance_status
-             FROM students s 
-             JOIN sclass sc ON s.sclass_id = sc.sclass_id 
-             JOIN admin a ON s.admin_id = a.admin_id 
-             LEFT JOIN exam_results er ON s.student_id = er.student_id
-             LEFT JOIN student_attendance sa ON s.student_id = sa.student_id
-             WHERE s.roll_num = ? AND s.name = ?
-             GROUP BY s.student_id`,
-            [student.rollNum, student.name]
-        );
-
-        // Combine data and remove sensitive information
-        const response = {
-            ...student.toObject(),
-            mysql_id: mysqlStudent[0]?.student_id,
-            password: undefined
-        };
-
-        res.send(response);
+        res.status(200).json(student);
     } catch (err) {
         console.error('Error fetching student details:', err);
-        res.status(500).json(err);
+        res.status(500).json({
+            message: 'Failed to fetch student details',
+            error: err.message
+        });
     }
 };
 
 const deleteStudent = async (req, res) => {
     try {
-        // Get student details
-        const student = await Student.findById(req.params.id);
-        if (!student) {
-            return res.status(404).send({ message: "Student not found" });
+        const studentId = req.params.id;
+
+        const deletedStudent = await Student.findByIdAndDelete(studentId);
+        
+        if (!deletedStudent) {
+            return res.status(404).json({ message: "Student not found" });
         }
 
-        // Delete from MongoDB
-        const deletedStudent = await Student.findByIdAndDelete(req.params.id);
-
-        // Delete from MySQL (will cascade delete attendance and exam results)
-        await db.mysql.execute(
-            'DELETE FROM students WHERE roll_num = ? AND name = ?',
-            [student.rollNum, student.name]
-        );
-
-        res.send(deletedStudent);
+        res.status(200).json({ 
+            message: "Student deleted successfully",
+            deletedStudent
+        });
     } catch (error) {
         console.error('Error deleting student:', error);
-        res.status(500).json(error);
+        res.status(500).json({
+            message: 'Failed to delete student',
+            error: error.message
+        });
     }
 };
 
 const deleteStudents = async (req, res) => {
     try {
-        // Get admin details for MySQL
-        const admin = await Admin.findById(req.params.id);
-        if (!admin) {
-            return res.status(404).send({ message: "Admin not found" });
+        const adminId = req.params.id;
+
+        const result = await Student.deleteMany({ school: adminId });
+        
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ message: "No students found to delete" });
         }
 
-        // Get MySQL admin_id
-        const [mysqlAdmin] = await db.mysql.execute(
-            'SELECT admin_id FROM admin WHERE email = ?',
-            [admin.email]
-        );
-
-        // Delete from MongoDB
-        const deletedStudents = await Student.deleteMany({ school: req.params.id });
-
-        // Delete from MySQL (will cascade delete attendance and exam results)
-        await db.mysql.execute(
-            'DELETE FROM students WHERE admin_id = ?',
-            [mysqlAdmin[0].admin_id]
-        );
-
-        res.send(deletedStudents);
+        res.status(200).json({ 
+            message: `${result.deletedCount} students deleted successfully`,
+            result
+        });
     } catch (error) {
         console.error('Error deleting students:', error);
-        res.status(500).json(error);
+        res.status(500).json({
+            message: 'Failed to delete students',
+            error: error.message
+        });
     }
 };
 
 const deleteStudentsByClass = async (req, res) => {
     try {
-        // Get class details
-        const sclass = await Sclass.findById(req.params.id);
-        if (!sclass) {
-            return res.status(404).send({ message: "Class not found" });
+        const classId = req.params.id;
+
+        const result = await Student.deleteMany({ sclassName: classId });
+        
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ message: "No students found in this class" });
         }
 
-        // Get MySQL class_id
-        const [mysqlClass] = await db.mysql.execute(
-            'SELECT sclass_id FROM sclass WHERE sclass_name = ? AND admin_id = (SELECT admin_id FROM admin WHERE email = ?)',
-            [sclass.sclassName, (await Admin.findById(sclass.school)).email]
-        );
-
-        // Delete from MongoDB
-        const deletedStudents = await Student.deleteMany({ sclassName: req.params.id });
-
-        // Delete from MySQL (will cascade delete attendance and exam results)
-        await db.mysql.execute(
-            'DELETE FROM students WHERE sclass_id = ?',
-            [mysqlClass[0].sclass_id]
-        );
-
-        res.send(deletedStudents);
+        res.status(200).json({ 
+            message: `${result.deletedCount} students deleted successfully`,
+            result
+        });
     } catch (error) {
         console.error('Error deleting students by class:', error);
-        res.status(500).json(error);
+        res.status(500).json({
+            message: 'Failed to delete students',
+            error: error.message
+        });
     }
 };
 
 const updateStudent = async (req, res) => {
     try {
-        // Get existing student details
-        const existingStudent = await Student.findById(req.params.id);
-        if (!existingStudent) {
-            return res.status(404).send({ message: "Student not found" });
-        }
-
-        // Get MySQL student_id
-        const [mysqlStudent] = await db.mysql.execute(
-            'SELECT student_id FROM students WHERE roll_num = ? AND name = ?',
-            [existingStudent.rollNum, existingStudent.name]
-        );
-
-        // Prepare update data
+        const studentId = req.params.id;
         const updateData = { ...req.body };
 
-        // Handle password update if provided
+        // Handle password update
         if (updateData.password) {
             const salt = await bcrypt.genSalt(10);
             updateData.password = await bcrypt.hash(updateData.password, salt);
         }
 
-        // If class is being updated, get new MySQL class_id
-        let mysqlClassId = null;
-        if (updateData.sclassName) {
-            const newClass = await Sclass.findById(updateData.sclassName);
-            const [mysqlClass] = await db.mysql.execute(
-                'SELECT sclass_id FROM sclass WHERE sclass_name = ? AND admin_id = (SELECT admin_id FROM admin WHERE email = ?)',
-                [newClass.sclassName, (await Admin.findById(existingStudent.school)).email]
-            );
-            mysqlClassId = mysqlClass[0].sclass_id;
+        const updatedStudent = await Student.findByIdAndUpdate(
+            studentId,
+            updateData,
+            { new: true, runValidators: true }
+        )
+        .select('-password -__v');
+
+        if (!updatedStudent) {
+            return res.status(404).json({ message: "Student not found" });
         }
 
-        // Update in MongoDB
-        const mongoResult = await Student.findByIdAndUpdate(
-            req.params.id,
-            { $set: updateData },
-            { new: true }
-        );
-
-        // Prepare MySQL update query parts
-        const mysqlUpdates = [];
-        const mysqlValues = [];
-
-        if (updateData.name) {
-            mysqlUpdates.push('name = ?');
-            mysqlValues.push(updateData.name);
-        }
-        if (updateData.rollNum) {
-            mysqlUpdates.push('roll_num = ?');
-            mysqlValues.push(updateData.rollNum);
-        }
-        if (updateData.password) {
-            mysqlUpdates.push('password = ?');
-            mysqlValues.push(updateData.password);
-        }
-        if (mysqlClassId) {
-            mysqlUpdates.push('sclass_id = ?');
-            mysqlValues.push(mysqlClassId);
-        }
-
-        // Update in MySQL if there are changes
-        if (mysqlUpdates.length > 0) {
-            mysqlValues.push(mysqlStudent[0].student_id); // Add WHERE clause value
-            await db.mysql.execute(
-                `UPDATE students SET ${mysqlUpdates.join(', ')} WHERE student_id = ?`,
-                mysqlValues
-            );
-        }
-
-        // Remove sensitive data before sending response
-        const response = mongoResult.toObject();
-        response.password = undefined;
-        response.mysql_id = mysqlStudent[0].student_id;
-
-        res.send(response);
+        res.status(200).json(updatedStudent);
     } catch (error) {
         console.error('Error updating student:', error);
         res.status(500).json({
@@ -405,285 +266,236 @@ const updateStudent = async (req, res) => {
 };
 
 const updateExamResult = async (req, res) => {
-    const { subName, marksObtained } = req.body;
-
     try {
-        // Get student and subject details
-        const student = await Student.findById(req.params.id);
+        const studentId = req.params.id;
+        const { subName, marksObtained } = req.body;
+
+        // Validate input
+        if (!subName || !marksObtained) {
+            return res.status(400).json({ 
+                message: 'Subject ID and marks obtained are required' 
+            });
+        }
+
+        // Verify subject exists
+        const subjectExists = await Subject.findById(subName);
+        if (!subjectExists) {
+            return res.status(404).json({ message: "Subject not found" });
+        }
+
+        const student = await Student.findById(studentId);
         if (!student) {
-            return res.status(404).send({ message: 'Student not found' });
+            return res.status(404).json({ message: "Student not found" });
         }
 
-        const subject = await Subject.findById(subName);
-        if (!subject) {
-            return res.status(404).send({ message: 'Subject not found' });
-        }
-
-        // Get MySQL IDs
-        const [mysqlStudent] = await db.mysql.execute(
-            'SELECT student_id FROM students WHERE roll_num = ? AND name = ?',
-            [student.rollNum, student.name]
+        // Update or add exam result
+        const existingResultIndex = student.examResult.findIndex(
+            result => result.subName.toString() === subName
         );
 
-        const [mysqlSubject] = await db.mysql.execute(
-            'SELECT subject_id FROM subjects WHERE sub_code = ?',
-            [subject.subCode]
-        );
-
-        // Update in MongoDB
-        const existingResult = student.examResult.find(
-            (result) => result.subName.toString() === subName
-        );
-
-        if (existingResult) {
-            existingResult.marksObtained = marksObtained;
+        if (existingResultIndex >= 0) {
+            student.examResult[existingResultIndex].marksObtained = marksObtained;
         } else {
             student.examResult.push({ subName, marksObtained });
         }
 
-        const mongoResult = await student.save();
+        const updatedStudent = await student.save();
+        
+        // Remove sensitive data before response
+        const response = updatedStudent.toObject();
+        delete response.password;
+        delete response.__v;
 
-        // Update in MySQL
-        await db.mysql.execute(
-            `INSERT INTO exam_results (student_id, subject_id, marks_obtained) 
-             VALUES (?, ?, ?) 
-             ON DUPLICATE KEY UPDATE marks_obtained = ?`,
-            [
-                mysqlStudent[0].student_id,
-                mysqlSubject[0].subject_id,
-                marksObtained,
-                marksObtained
-            ]
-        );
-
-        res.send(mongoResult);
+        res.status(200).json(response);
     } catch (error) {
         console.error('Error updating exam result:', error);
-        res.status(500).json(error);
+        res.status(500).json({
+            message: 'Failed to update exam result',
+            error: error.message
+        });
     }
 };
 
 const studentAttendance = async (req, res) => {
-    const { subName, status, date } = req.body;
-
     try {
-        // Get student and subject details
-        const student = await Student.findById(req.params.id);
-        if (!student) {
-            return res.status(404).send({ message: 'Student not found' });
+        const studentId = req.params.id;
+        const { subName, status, date } = req.body;
+
+        // Validate input
+        if (!subName || !status || !date) {
+            return res.status(400).json({ 
+                message: 'Subject ID, status and date are required' 
+            });
         }
 
+        // Verify subject exists
         const subject = await Subject.findById(subName);
         if (!subject) {
-            return res.status(404).send({ message: 'Subject not found' });
+            return res.status(404).json({ message: "Subject not found" });
         }
 
-        // Get MySQL IDs
-        const [mysqlStudent] = await db.mysql.execute(
-            'SELECT student_id FROM students WHERE roll_num = ? AND name = ?',
-            [student.rollNum, student.name]
+        const student = await Student.findById(studentId);
+        if (!student) {
+            return res.status(404).json({ message: "Student not found" });
+        }
+
+        // Check if attendance already exists for this date and subject
+        const attendanceDate = new Date(date);
+        const existingAttendanceIndex = student.attendance.findIndex(a => 
+            a.subName.toString() === subName && 
+            a.date.toDateString() === attendanceDate.toDateString()
         );
 
-        const [mysqlSubject] = await db.mysql.execute(
-            'SELECT subject_id FROM subjects WHERE sub_code = ?',
-            [subject.subCode]
-        );
-
-        // Check attendance in MongoDB
-        const existingAttendance = student.attendance.find(
-            (a) =>
-                a.date.toDateString() === new Date(date).toDateString() &&
-                a.subName.toString() === subName
-        );
-
-        // Update MongoDB
-        if (existingAttendance) {
-            existingAttendance.status = status;
+        if (existingAttendanceIndex >= 0) {
+            // Update existing attendance
+            student.attendance[existingAttendanceIndex].status = status;
         } else {
+            // Check session limit
             const attendedSessions = student.attendance.filter(
-                (a) => a.subName.toString() === subName
+                a => a.subName.toString() === subName
             ).length;
 
             if (attendedSessions >= subject.sessions) {
-                return res.send({ message: 'Maximum attendance limit reached' });
+                return res.status(400).json({ 
+                    message: 'Maximum attendance sessions reached for this subject' 
+                });
             }
 
-            student.attendance.push({ date, status, subName });
+            // Add new attendance
+            student.attendance.push({ 
+                date: attendanceDate, 
+                status, 
+                subName 
+            });
         }
 
-        const mongoResult = await student.save();
+        const updatedStudent = await student.save();
+        
+        // Remove sensitive data before response
+        const response = updatedStudent.toObject();
+        delete response.password;
+        delete response.__v;
 
-        // Update MySQL
-        await db.mysql.execute(
-            `INSERT INTO student_attendance (student_id, subject_id, date, status) 
-             VALUES (?, ?, ?, ?) 
-             ON DUPLICATE KEY UPDATE status = ?`,
-            [
-                mysqlStudent[0].student_id,
-                mysqlSubject[0].subject_id,
-                new Date(date),
-                status,
-                status
-            ]
-        );
-
-        res.send(mongoResult);
+        res.status(200).json(response);
     } catch (error) {
         console.error('Error updating attendance:', error);
-        res.status(500).json(error);
+        res.status(500).json({
+            message: 'Failed to update attendance',
+            error: error.message
+        });
     }
 };
 
 const clearAllStudentsAttendanceBySubject = async (req, res) => {
-    const subName = req.params.id;
-
     try {
-        // Get subject details for MySQL
-        const subject = await Subject.findById(subName);
-        if (!subject) {
-            return res.status(404).send({ message: 'Subject not found' });
+        const subjectId = req.params.id;
+
+        // Verify subject exists
+        const subjectExists = await Subject.findById(subjectId);
+        if (!subjectExists) {
+            return res.status(404).json({ message: "Subject not found" });
         }
 
-        // Get MySQL subject_id
-        const [mysqlSubject] = await db.mysql.execute(
-            'SELECT subject_id FROM subjects WHERE sub_code = ?',
-            [subject.subCode]
+        // Remove attendance records for this subject from all students
+        const result = await Student.updateMany(
+            { 'attendance.subName': subjectId },
+            { $pull: { attendance: { subName: subjectId } } }
         );
 
-        // Clear in MongoDB
-        const mongoResult = await Student.updateMany(
-            { 'attendance.subName': subName },
-            { $pull: { attendance: { subName } } }
-        );
-
-        // Clear in MySQL
-        await db.mysql.execute(
-            'DELETE FROM student_attendance WHERE subject_id = ?',
-            [mysqlSubject[0].subject_id]
-        );
-
-        return res.send(mongoResult);
+        res.status(200).json({
+            message: `Cleared attendance for subject ${subjectId}`,
+            result
+        });
     } catch (error) {
-        console.error('Error clearing attendance:', error);
-        res.status(500).json(error);
+        console.error('Error clearing attendance by subject:', error);
+        res.status(500).json({
+            message: 'Failed to clear attendance',
+            error: error.message
+        });
     }
 };
 
 const clearAllStudentsAttendance = async (req, res) => {
-    const schoolId = req.params.id;
-
     try {
-        // Get admin details for MySQL
-        const admin = await Admin.findById(schoolId);
-        if (!admin) {
-            return res.status(404).send({ message: "Admin not found" });
-        }
+        const adminId = req.params.id;
 
-        // Get MySQL admin_id
-        const [mysqlAdmin] = await db.mysql.execute(
-            'SELECT admin_id FROM admin WHERE email = ?',
-            [admin.email]
-        );
-
-        // Clear in MongoDB
-        const mongoResult = await Student.updateMany(
-            { school: schoolId },
+        // Clear attendance for all students of this school
+        const result = await Student.updateMany(
+            { school: adminId },
             { $set: { attendance: [] } }
         );
 
-        // Clear in MySQL
-        await db.mysql.execute(
-            `DELETE sa FROM student_attendance sa 
-             INNER JOIN students s ON sa.student_id = s.student_id 
-             WHERE s.admin_id = ?`,
-            [mysqlAdmin[0].admin_id]
-        );
-
-        return res.send(mongoResult);
+        res.status(200).json({
+            message: `Cleared attendance for all students in school ${adminId}`,
+            result
+        });
     } catch (error) {
         console.error('Error clearing all attendance:', error);
-        res.status(500).json(error);
+        res.status(500).json({
+            message: 'Failed to clear attendance',
+            error: error.message
+        });
     }
 };
 
 const removeStudentAttendanceBySubject = async (req, res) => {
-    const studentId = req.params.id;
-    const subName = req.body.subId;
-
     try {
-        // Get student and subject details
-        const student = await Student.findById(studentId);
-        const subject = await Subject.findById(subName);
+        const studentId = req.params.id;
+        const subjectId = req.body.subId;
 
-        if (!student || !subject) {
-            return res.status(404).send({ message: 'Student or subject not found' });
+        // Verify subject exists
+        const subjectExists = await Subject.findById(subjectId);
+        if (!subjectExists) {
+            return res.status(404).json({ message: "Subject not found" });
         }
 
-        // Get MySQL IDs
-        const [mysqlStudent] = await db.mysql.execute(
-            'SELECT student_id FROM students WHERE roll_num = ? AND name = ?',
-            [student.rollNum, student.name]
-        );
-
-        const [mysqlSubject] = await db.mysql.execute(
-            'SELECT subject_id FROM subjects WHERE sub_code = ?',
-            [subject.subCode]
-        );
-
-        // Remove in MongoDB
-        const mongoResult = await Student.updateOne(
+        // Remove attendance records for this subject from the student
+        const result = await Student.updateOne(
             { _id: studentId },
-            { $pull: { attendance: { subName: subName } } }
+            { $pull: { attendance: { subName: subjectId } } }
         );
 
-        // Remove in MySQL
-        await db.mysql.execute(
-            'DELETE FROM student_attendance WHERE student_id = ? AND subject_id = ?',
-            [mysqlStudent[0].student_id, mysqlSubject[0].subject_id]
-        );
+        if (result.nModified === 0) {
+            return res.status(404).json({ 
+                message: "No attendance records found for this subject" 
+            });
+        }
 
-        return res.send(mongoResult);
+        res.status(200).json({
+            message: `Removed attendance for subject ${subjectId}`,
+            result
+        });
     } catch (error) {
-        console.error('Error removing student attendance:', error);
-        res.status(500).json(error);
+        console.error('Error removing attendance by subject:', error);
+        res.status(500).json({
+            message: 'Failed to remove attendance',
+            error: error.message
+        });
     }
 };
 
 const removeStudentAttendance = async (req, res) => {
-    const studentId = req.params.id;
-
     try {
-        // Get student details
-        const student = await Student.findById(studentId);
-        if (!student) {
-            return res.status(404).send({ message: 'Student not found' });
-        }
+        const studentId = req.params.id;
 
-        // Get MySQL student_id
-        const [mysqlStudent] = await db.mysql.execute(
-            'SELECT student_id FROM students WHERE roll_num = ? AND name = ?',
-            [student.rollNum, student.name]
-        );
-
-        // Clear in MongoDB
-        const mongoResult = await Student.updateOne(
+        // Clear all attendance for this student
+        const result = await Student.updateOne(
             { _id: studentId },
             { $set: { attendance: [] } }
         );
 
-        // Clear in MySQL
-        await db.mysql.execute(
-            'DELETE FROM student_attendance WHERE student_id = ?',
-            [mysqlStudent[0].student_id]
-        );
-
-        return res.send(mongoResult);
+        res.status(200).json({
+            message: "Cleared all attendance records",
+            result
+        });
     } catch (error) {
-        console.error('Error removing student attendance:', error);
-        res.status(500).json(error);
+        console.error('Error removing attendance:', error);
+        res.status(500).json({
+            message: 'Failed to remove attendance',
+            error: error.message
+        });
     }
 };
-
 
 module.exports = {
     studentRegister,

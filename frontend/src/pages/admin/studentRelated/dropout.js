@@ -184,7 +184,7 @@ const Dropout = () => {
       <h1>DROPOUT RISK ANALYSIS DASHBOARD</h1>
 
       <div style={styles.controlPanel}>
-        <select
+        {/* <select
           value={selectedTimeframe}
           onChange={(e) => setSelectedTimeframe(e.target.value)}
           style={styles.select}
@@ -192,7 +192,7 @@ const Dropout = () => {
           <option value="all">All Time</option>
           <option value="semester">Current Semester</option>
           <option value="month">Last Month</option>
-        </select>
+        </select> */}
 
         <button 
           onClick={() => setChartType(chartType === 'bar' ? 'pie' : 'bar')}
@@ -208,7 +208,7 @@ const Dropout = () => {
         <div style={styles.dashboard}>
           <div style={styles.leftPanel}>
             <div style={styles.dropoutChartContainer}>
-              <h3>Dropout Risk {chartType === 'bar' ? 'Bar' : 'Pie'} Graph</h3>
+              <h3>Dropout Risk </h3>
               <div style={styles.chartWrapper}>
                 {chartType === 'bar' ? (
                   <Bar
@@ -225,7 +225,41 @@ const Dropout = () => {
                     options={{
                       responsive: true,
                       maintainAspectRatio: true,
+                      scales: {
+                        x: {
+                          title: {
+                            display: true,
+                            text: 'Risk Categories',
+                            font: {
+                              size: 14,
+                              weight: 'bold'
+                            }
+                          }
+                        },
+                        y: {
+                          title: {
+                            display: true,
+                            text: 'Number of Students',
+                            font: {
+                              size: 14,
+                              weight: 'bold'
+                            }
+                          },
+                          beginAtZero: true
+                        }
+                      },
                       plugins: {
+                        legend: {
+                          display: false
+                        },
+                        title: {
+                          display: true,
+                          text: 'Student Dropout Risk Distribution',
+                          font: {
+                            size: 16,
+                            weight: 'bold'
+                          }
+                        },
                         tooltip: {
                           callbacks: {
                             label: function (tooltipItem) {
@@ -256,6 +290,17 @@ const Dropout = () => {
                       responsive: true,
                       maintainAspectRatio: true,
                       plugins: {
+                        legend: {
+                          display: false
+                        },
+                        title: {
+                          display: true,
+                          text: 'Student Dropout Risk Distribution (%)',
+                          font: {
+                            size: 16,
+                            weight: 'bold'
+                          }
+                        },
                         tooltip: {
                           callbacks: {
                             label: function (tooltipItem) {
@@ -283,7 +328,6 @@ const Dropout = () => {
                   ? Object.entries(riskFactors).reduce((a, b) => (a[1] > b[1] ? a : b), ['None', 0])[0]
                   : 'None'
               }</p>
-              <p>Month-over-Month Change: --</p>
             </div>
           </div>
 
@@ -298,13 +342,40 @@ const Dropout = () => {
                       responsive: true,
                       maintainAspectRatio: true,
                       scales: {
-                        y: {
-                          beginAtZero: true,
+                        x: {
                           title: {
                             display: true,
-                            text: 'Number of Students'
+                            text: 'Risk Factors',
+                            font: {
+                              size: 14,
+                              weight: 'bold'
+                            }
                           }
+                        },
+                        y: {
+                          title: {
+                            display: true,
+                            text: 'Number of Students',
+                            font: {
+                              size: 14,
+                              weight: 'bold'
+                            }
+                          },
+                          beginAtZero: true
                         }
+                      },
+                      plugins: {
+                        legend: {
+                          display: false
+                        },
+                        title: {
+                          display: true,
+                          text: 'Contributing Factors to Dropout Risk',
+                          font: {
+                            size: 16,
+                            weight: 'bold'
+                          }
+                        },
                       }
                     }}
                   />
@@ -322,6 +393,17 @@ const Dropout = () => {
                       responsive: true,
                       maintainAspectRatio: true,
                       plugins: {
+                        legend: {
+                          display: false
+                        },
+                        title: {
+                          display: true,
+                          text: 'Contributing Factors to Dropout Risk (%)',
+                          font: {
+                            size: 16,
+                            weight: 'bold'
+                          }
+                        },
                         tooltip: {
                           callbacks: {
                             label: function(tooltipItem) {

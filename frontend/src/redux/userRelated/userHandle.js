@@ -33,7 +33,7 @@ export const registerUser = (fields, role) => async (dispatch) => {
     dispatch(authRequest());
 
     try {
-        const result = await axios.post(`http://localhost:5000/${role}Reg`, fields, {
+        const result = await axios.post(`${process.env.REACT_APP_BASE_URL}/${role}Reg`, fields, {
             headers: { 'Content-Type': 'application/json' },
         });
 

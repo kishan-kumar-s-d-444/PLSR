@@ -9,7 +9,7 @@ const BASE_URL = "http://localhost:5000";
 
 export const sendDoubt = (doubtData) => async (dispatch) => {
     try {
-        const response = await axios.post(`${BASE_URL}/doubt/add`, doubtData);
+        const response = await axios.post(`${process.env.REACT_APP_BASE_URL}/doubt/add`, doubtData);
         dispatch(createDoubt(response.data));
     } catch (error) {
         console.error('Error sending doubt:', error);
@@ -18,7 +18,7 @@ export const sendDoubt = (doubtData) => async (dispatch) => {
 
 export const retrieveDoubts = (userId, userType) => async (dispatch) => {
     try {
-        const response = await axios.get(`${BASE_URL}/doubt/get`, {
+        const response = await axios.get(`${process.env.REACT_APP_BASE_URL}/doubt/get`, {
             params: { userId, userType },
         });
         dispatch(fetchDoubts(response.data));
@@ -30,7 +30,7 @@ export const retrieveDoubts = (userId, userType) => async (dispatch) => {
 export const retrieveConversation = (senderId, receiverId) => async (dispatch) => {
     try {
         const response = await axios.get(
-            `${BASE_URL}/doubt/conversation/${senderId}/${receiverId}`
+            `${process.env.REACT_APP_BASE_URL}/doubt/conversation/${senderId}/${receiverId}`
         );
         dispatch(fetchConversation(response.data));
     } catch (error) {
